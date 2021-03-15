@@ -1,139 +1,186 @@
-<title>Jamun Bot - JCrawler</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">	
-<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
-<script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
-<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
-<center>
-<br><br><br>
-<h2>Jamun Bot - JCrawler - v0.1</h2>
-<form action="" method="GET">
-<input type="text" name="q" size="50" placeholder="Enter URL / LINK with http://">
-</form>
-<p>Remember spaces between keywords are not allowed, try special characters like /, _, %20%, +</p>
-<a href='./' class='btn btn-outline-warning'>Go Back</a>
-</center>
-
-
-<style>
-div.relative {
-  position: relative;
-  left: 30px;
-}
-</style>
 <?php
-error_reporting(0);
-ini_set('max_execution_time', 120); 
-//300 seconds = 5 minutes
-//60 = 1 mai
-//120 = 2m
+include("config.php");
+include("classes/DomDocumentParser.php");
 
-$starting = $_GET["q"];
-$start = 'https://duckduckgo.com/?q='.$starting.'&ia=web';
-
-$already_crawled = array();
+$alreadyCrawled = array();
 $crawling = array();
+$alreadyFoundImages = array();
 
-function get_details($s_link) {
+function linkExists($url) {
+	global $con;
+
+	$query = $con->prepare("SELECT * FROM sites WHERE url = :url");
+
+	$query->bindParam(":url", $url);
+	$query->execute();
+
+	return $query->rowCount() != 0;
+}
+
+function insertLink($url, $title, $description, $keywords) {
+	global $con;
+
+	$query = $con->prepare("INSERT INTO sites(url, title, description, keywords)
+							VALUES(:url, :title, :description, :keywords)");
+
+	$query->bindParam(":url", $url);
+	$query->bindParam(":title", $title);
+	$query->bindParam(":description", $description);
+	$query->bindParam(":keywords", $keywords);
+
+	return $query->execute();
+}
+
+function insertImage($url, $src, $alt, $title) {
+	global $con;
+
+	$query = $con->prepare("INSERT INTO images(siteUrl, imageUrl, alt, title)
+							VALUES(:siteUrl, :imageUrl, :alt, :title)");
+
+	$query->bindParam(":siteUrl", $url);
+	$query->bindParam(":imageUrl", $src);
+	$query->bindParam(":alt", $alt);
+	$query->bindParam(":title", $title);
+
+	return $query->execute();
+}
+
+function createLink($src, $url) {
+
+	$scheme = parse_url($url)["scheme"]; // http
+	$host = parse_url($url)["host"]; // www.reecekenney.com
+	
+	if(substr($src, 0, 2) == "//") {
+		$src =  $scheme . ":" . $src;
+	}
+	else if(substr($src, 0, 1) == "/") {
+		$src = $scheme . "://" . $host . $src;
+	}
+	else if(substr($src, 0, 2) == "./") {
+		$src = $scheme . "://" . $host . dirname(parse_url($url)["path"]) . substr($src, 1);
+	}
+	else if(substr($src, 0, 3) == "../") {
+		$src = $scheme . "://" . $host . "/" . $src;
+	}
+	else if(substr($src, 0, 5) != "https" && substr($src, 0, 4) != "http") {
+		$src = $scheme . "://" . $host . "/" . $src;
+	}
+
+	return $src;
+}
+
+function getDetails($url) {
+
+	global $alreadyFoundImages;
+
+	$parser = new DomDocumentParser($url);
+
+	$titleArray = $parser->getTitleTags();
+
+	if(sizeof($titleArray) == 0 || $titleArray->item(0) == NULL) {
+		return;
+	}
+
+	$title = $titleArray->item(0)->nodeValue;
+	$title = str_replace("\n", "", $title);
+
+	if($title == "") {
+		return;
+	}
+
+	$description = "";
+	$keywords = "";
+
+	$metasArray = $parser->getMetatags();
+
+	foreach($metasArray as $meta) {
+
+		if($meta->getAttribute("name") == "description") {
+			$description = $meta->getAttribute("content");
+		}
+
+		if($meta->getAttribute("name") == "keywords") {
+			$keywords = $meta->getAttribute("content");
+		}
+	}
+
+	$description = str_replace("\n", "", $description);
+	$keywords = str_replace("\n", "", $keywords);
 
 
-	$options = array('http'=>array('method'=>"GET", 'headers'=>"User-Agent: jamunBot/0.1\n"));
-	
-	$context = stream_context_create($options);
+	if(linkExists($url)) {
+		echo "$url already exists<br>";
+	}
+	else if(insertLink($url, $title, $description, $keywords)) {
+		echo "SUCCESS: $url<br>";
+	}
+	else {
+		echo "ERROR: Failed to insert $url<br>";
+	}
 
-	$doc = new DOMDocument();
-	
-	@$doc->loadHTML(@file_get_contents($s_link, false, $context));
+	$imageArray = $parser->getImages();
+	foreach($imageArray as $image) {
+		$src = $image->getAttribute("src");
+		$alt = $image->getAttribute("alt");
+		$title = $image->getAttribute("title");
 
-	
-	$s_title = $doc->getElementsByTagName("title");
-	
-	$s_title = $s_title->item(0)->nodeValue;
-	
-	$s_des = "";
-	$s_key = "";
-	
-	$metas = $doc->getElementsByTagName("meta");
-	
-	for ($i = 0; $i < $metas->length; $i++) {
-		$meta = $metas->item($i);
-		
-		if (strtolower($meta->getAttribute("name")) == "description")
-			$s_des = $meta->getAttribute("content");
-		if (strtolower($meta->getAttribute("name")) == "keywords")
-			$s_key = $meta->getAttribute("content");
+		if(!$title && !$alt) {
+			continue;
+		}
+
+		$src = createLink($src, $url);
+
+		if(!in_array($src, $alreadyFoundImages)) {
+			$alreadyFoundImages[] = $src;
+
+			insertImage($url, $src, $alt, $title);
+		}
 
 	}
-	   
-	    /*  echo 'title:<font color="blue">'.$s_title.'</font>';?><br>
-	<?php echo 'link:<font color="green">'.$s_link.'</font>'; ?><br>
-	<?php echo 'description:'.$s_des.''; ?><br>
-	<?php echo "keywords: ".addslashes("", "", $s_key).""; ?><br><br><br><hr>*/
-	      echo '<a href="'.$s_link.'"><div class="relative"><font color="blue">'.$s_title.'</font></a>';?><br>
-	<?php echo '<font color="green">'.$s_link.'</font>'; ?><br>
-	<?php echo '<font color="gray">'.$s_des.'</font>'; ?><br>
-	<?php echo '<font color="red">'.$s_key.'</font></div>'; ?><br>
-	<?php
+
+
 }
 
+function followLinks($url) {
 
-/Core function of jamunBot
-
-function follow_links($url) {
-	
-	global $already_crawled;
+	global $alreadyCrawled;
 	global $crawling;
 
-	$options = array('http'=>array('method'=>"GET", 'headers'=>"User-Agent: jamunBot/0.1\n"));
+	$parser = new DomDocumentParser($url);
 
-	$context = stream_context_create($options);
+	$linkList = $parser->getLinks();
 
-	$doc = new DOMDocument();
+	foreach($linkList as $link) {
+		$href = $link->getAttribute("href");
 
-	@$doc->loadHTML(@file_get_contents($url, false, $context));
-
-	$linklist = $doc->getElementsByTagName("a");
-
-//Function to eliminate the relative links in the website
-	foreach ($linklist as $link) {
-		$l =  $link->getAttribute("href");
-		
-		if (substr($l, 0, 1) == "/" && substr($l, 0, 2) != "//") {
-			$l = parse_url($url)["scheme"]."://".parse_url($url)["host"].$l;
-		} else if (substr($l, 0, 2) == "//") {
-			$l = parse_url($url)["scheme"].":".$l;
-		} else if (substr($l, 0, 2) == "./") {
-			$l = parse_url($url)["scheme"]."://".parse_url($url)["host"].dirname(parse_url($url)["path"]).substr($l, 1);
-		} else if (substr($l, 0, 1) == "#") {
-			$l = parse_url($url)["scheme"]."://".parse_url($url)["host"].parse_url($url)["path"].$l;
-		} else if (substr($l, 0, 3) == "../") {
-			$l = parse_url($url)["scheme"]."://".parse_url($url)["host"]."/".$l;
-		} else if (substr($l, 0, 11) == "javascript:") {
+		if(strpos($href, "#") !== false) {
 			continue;
-		} else if (substr($l, 0, 5) != "https" && substr($l, 0, 4) != "http") {
-			$l = parse_url($url)["scheme"]."://".parse_url($url)["host"]."/".$l;
 		}
-	
-		if (!in_array($l, $already_crawled)) {
-				$already_crawled[] = $l;
-				$crawling[] = $l;
-				
-				echo get_details($l)."\n";
+		else if(substr($href, 0, 11) == "javascript:") {
+			continue;
+		}
+
+
+		$href = createLink($href, $url);
+
+
+		if(!in_array($href, $alreadyCrawled)) {
+			$alreadyCrawled[] = $href;
+			$crawling[] = $href;
+
+			getDetails($href);
 		}
 
 	}
-	
+
 	array_shift($crawling);
-	
-	foreach ($crawling as $site) {
-		follow_links($site);
+
+	foreach($crawling as $site) {
+		followLinks($site);
 	}
 
 }
 
-follow_links($start);
+$startUrl = "http://www.reecekenney.com";
+followLinks($startUrl);
 ?>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
-<script>$(document).ready(function(){ 	$('body').find('img[src$="https://cdn.rawgit.com/000webhost/logo/e9bd13f7/footer-powered-by-000webhost-white2.png"]').remove();    }); </script>
-<script>window.onload = () => {    let el = document.querySelector('[alt="www.000webhost.com"]').parentNode.parentNode;    el.parentNode.removeChild(el);}</script>
