@@ -1,8 +1,9 @@
 # JCrawler
-The Source Code of the Official Crawler - JamunBot / Crawler of JamunSearch
+The Source Code of the Official Crawler - JamunBot / Crawler of Jamun Search
 
-Working Site : http://jamunbot.rf.gd/
 
-Simply Run the crawler.php file to start crawling!
+Recursive Crawler in PHP with Page Ranking Using URL Maps
+Edit the `config.php` with the database credentials.
+Visit the `index.php` page and enter the URL.
+
 Worry about temporary crawl results? Try adding them to your database!
-Instructions: https://www.privacydefenders.bss.design/jamunbot/
